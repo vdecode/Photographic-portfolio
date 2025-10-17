@@ -1,0 +1,37 @@
+import { Component } from '@angular/core';
+import { RecipeStore } from '../stores/recipe.store';
+import { Observable } from 'rxjs';
+import { Recipe } from '../models/recipe.model';
+
+@Component({
+  selector: 'app-recipe-list',
+  standalone: true,
+  template: `
+  <div class="mb-3">
+    <input class="form-control mb-2" placeholder="Search name..." (input)="store.setSearch($any($event.target).value)" />
+    <input class="form-control mb-2" placeholder="Ingredient..." (input)="store.setIngredient($any($event.target).value)" />
+    <input class="form-control mb-2" placeholder="Cuisine..." (input)="store.setCuisine($any($event.target).value)" />
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-4" *ngFor="let r of filtered$ | async">
+      <div class="recipe-card">
+        <img [src]="r.images?.[0] || 'https://via.placeholder.com/400x250?text=No+Image'" />
+        <h5>{{ r.title }}</h5>
+        <p><small>{{ r.cuisine }}</small></p>
+        <button class="btn btn-sm btn-outline-primary" (click)="store.toggleFavorite(r.id)">
+          {{ (favorites$ | async)?.includes(r.id) ? 'Remove from Favorites' : 'Add to Favorites' }}
+        </button>
+      </div>
+    </div>
+  </div>
+  `,
+})
+export class RecipeListComponent {
+  filtered$: Observable<Recipe[]>;
+  favorites$: Observable<number[]>;
+  constructor(public store: RecipeStore){
+    this.filtered$ = this.store.filtered$;
+    this.favorites$ = this.store.favorites$;
+  }
+}
