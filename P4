@@ -1,0 +1,29 @@
+import { Component, OnInit } from '@angular/core';
+import { RecipeStore } from '../stores/recipe.store';
+import { ActivatedRoute } from '@angular/router';
+import { Recipe } from '../models/recipe.model';
+
+@Component({
+  selector: 'app-recipe-detail',
+  standalone: true,
+  template: `
+    <div *ngIf="recipe">
+      <h3>{{recipe.title}}</h3>
+      <img [src]="recipe.images?.[0] || 'https://via.placeholder.com/400x250?text=No+Image'" 
+           style="width:100%; max-height:300px; object-fit:cover;" />
+      <p><strong>Cuisine:</strong> {{recipe.cuisine}}</p>
+      <p><strong>Ingredients:</strong></p>
+      <ul><li *ngFor="let i of recipe.ingredients">{{i}}</li></ul>
+      <p><strong>Instructions:</strong></p>
+      <p>{{recipe.instructions}}</p>
+    </div>
+  `,
+})
+export class RecipeDetailComponent implements OnInit {
+  recipe?: Recipe;
+  constructor(private store: RecipeStore, private route: ActivatedRoute){}
+  ngOnInit(){
+    const id = Number(this.route.snapshot.paramMap.get('id'));
+    this.recipe = this.store.getRecipe(id);
+  }
+}
