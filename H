@@ -1,0 +1,173 @@
+const fs = require('fs');
+const path = require('path');
+
+const SRC = path.join(__dirname, 'src');
+
+const files = {
+  'main.ts': `import { bootstrapApplication } from '@angular/platform-browser';
+import { provideRouter } from '@angular/router';
+import { AppComponent } from './app/app.component';
+import { appRoutes } from './app/app.routes';
+import { provideHttpClient } from '@angular/common/http';
+
+bootstrapApplication(AppComponent, {
+  providers: [
+    provideRouter(appRoutes),
+    provideHttpClient(),
+  ],
+}).catch(err => console.error(err));
+`,
+  'index.html': `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Recipe Store</title>
+  <base href="/" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+  <app-root></app-root>
+</body>
+</html>
+`,
+  'styles.scss': `body { margin:0; font-family:Arial,sans-serif; background:#fff; color:#222; }
+.dark { background:#121212; color:#f2f2f2; }
+.app-shell { padding:1rem; max-width:1100px; margin:0 auto; }
+.recipe-card { border:1px solid #e6e6e6; border-radius:8px; padding:0.75rem; }
+.recipe-card img { border-radius:6px; object-fit:cover; width:100%; height:150px; }
+`,
+  'app/app.routes.ts': `import { Routes } from '@angular/router';
+import { RecipeListComponent } from './recipe-list/recipe-list.component';
+import { FavoritesComponent } from './favorites/favorites.component';
+import { ShoppingListComponent } from './shopping-list/shopping-list.component';
+import { RecipeDetailComponent } from './recipe-detail/recipe-detail.component';
+
+export const appRoutes: Routes = [
+  { path: '', component: RecipeListComponent },
+  { path: 'recipe/:id', component: RecipeDetailComponent },
+  { path: 'favorites', component: FavoritesComponent },
+  { path: 'shopping', component: ShoppingListComponent },
+  { path: '**', redirectTo: '' },
+];
+`,
+  'app/models/recipe.model.ts': `export interface Recipe {
+  id: number;
+  title: string;
+  cuisine: string;
+  ingredients: string[];
+  instructions?: string | string[];
+  images: string[];
+}
+`,
+  'app/services/recipe.service.ts': `import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Recipe } from '../models/recipe.model';
+import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
+
+@Injectable({ providedIn: 'root' })
+export class RecipeService {
+  private readonly API = 'https://dummyjson.com/recipes';
+  private readonly PLACEHOLDER = 'https://via.placeholder.com/400x250?text=No+Image';
+
+  constructor(private http: HttpClient) {}
+
+  fetchAll(limit = 100): Observable<Recipe[]> {
+    return this.http.get<any>(\`\${this.API}?limit=\${limit}\`).pipe(
+      map(res => (res?.recipes || []).map(r => ({
+        id: r.id,
+        title: r.title || r.name || 'No title',
+        cuisine: r.cuisine || 'Unknown',
+        ingredients: Array.isArray(r.ingredients)? r.ingredients : [String(r.ingredients||'')],
+        instructions: r.instructions || r.steps || '',
+        images: (r.images && r.images.length) ? r.images : [this.PLACEHOLDER]
+      })))
+    );
+  }
+
+  fetchById(id: number): Observable<Recipe> {
+    return this.http.get<any>(\`\${this.API}/\${id}\`).pipe(
+      map(r => ({
+        id: r.id,
+        title: r.title || r.name || 'No title',
+        cuisine: r.cuisine || 'Unknown',
+        ingredients: Array.isArray(r.ingredients)? r.ingredients : [String(r.ingredients||'')],
+        instructions: r.instructions || r.steps || '',
+        images: (r.images && r.images.length) ? r.images : [this.PLACEHOLDER]
+      }))
+    );
+  }
+}
+`,
+  'app/stores/recipe.store.ts': `import { Injectable } from '@angular/core';
+import { BehaviorSubject, combineLatest, map } from 'rxjs';
+import { Recipe } from '../models/recipe.model';
+import { RecipeService } from '../services/recipe.service';
+
+@Injectable({ providedIn: 'root' })
+export class RecipeStore {
+  recipesSubject = new BehaviorSubject<Recipe[]>([]);
+  recipes$ = this.recipesSubject.asObservable();
+
+  search$ = new BehaviorSubject<string>('');
+  ingredient$ = new BehaviorSubject<string>('');
+  cuisine$ = new BehaviorSubject<string>('');
+
+  favoritesSubject = new BehaviorSubject<number[]>([]);
+  favorites$ = this.favoritesSubject.asObservable();
+
+  filtered$ = combineLatest([
+    this.recipes$,
+    this.search$,
+    this.ingredient$,
+    this.cuisine$
+  ]).pipe(map(([recipes,s,i,c])=>{
+    s = (s||'').toLowerCase();
+    i = (i||'').toLowerCase();
+    c = (c||'').toLowerCase();
+    return recipes.filter(r=>{
+      const title = (r.title||'').toLowerCase();
+      const matchesSearch = s? title.includes(s) : true;
+      const matchesIng = i? (r.ingredients||[]).some(x=>x.toLowerCase().includes(i)) : true;
+      const matchesCuisine = c? (r.cuisine||'').toLowerCase().includes(c) : true;
+      return matchesSearch && matchesIng && matchesCuisine;
+    });
+  }));
+
+  constructor(private api:RecipeService){
+    this.api.fetchAll().subscribe(list=>this.recipesSubject.next(list));
+    const fav = localStorage.getItem('favorites');
+    if(fav) this.favoritesSubject.next(JSON.parse(fav));
+    this.favorites$.subscribe(arr=>localStorage.setItem('favorites', JSON.stringify(arr||[])));
+  }
+
+  setSearch(v:string){ this.search$.next(v); }
+  setIngredient(v:string){ this.ingredient$.next(v); }
+  setCuisine(v:string){ this.cuisine$.next(v); }
+  toggleFavorite(id:number){
+    const arr = [...new Set(this.favoritesSubject.getValue())];
+    const idx = arr.indexOf(id);
+    if(idx===-1) arr.push(id); else arr.splice(idx,1);
+    this.favoritesSubject.next(arr);
+  }
+  getRecipe(id:number){ return this.recipesSubject.getValue().find(r=>r.id===id); }
+  generateShoppingList(ids?:number[]){ 
+    const all = this.recipesSubject.getValue();
+    const sel = ids?.length? ids : this.favoritesSubject.getValue();
+    const set = new Set<string>();
+    all.forEach(r=>{ if(sel.includes(r.id)) r.ingredients.forEach(x=>set.add(x)) });
+    return Array.from(set);
+  }
+}
+`
+};
+
+// Helper to write all files recursively
+for (const [relativePath, content] of Object.entries(files)) {
+  const fullPath = path.join(SRC, relativePath);
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, content, 'utf8');
+}
+
+console.log('✅ All src/ files have been generated successfully!');
