@@ -1,0 +1,294 @@
+const fs = require('fs');
+const path = require('path');
+
+const SRC = path.join(__dirname, 'src/app');
+
+const files = {
+  'app.component.ts': `import { Component } from '@angular/core';
+import { RouterModule } from '@angular/router';
+import { DarkModeToggleComponent } from './dark-mode-toggle/dark-mode-toggle.component';
+
+@Component({
+  selector: 'app-root',
+  standalone: true,
+  imports: [RouterModule, DarkModeToggleComponent],
+  template: \`
+    <div class="app-shell container">
+      <header class="d-flex align-items-center justify-content-between py-3">
+        <h1 class="h4 m-0">Recipe Store</h1>
+        <dark-mode-toggle></dark-mode-toggle>
+      </header>
+      <main class="mt-3">
+        <router-outlet></router-outlet>
+      </main>
+    </div>
+  \`,
+})
+export class AppComponent {}
+`,
+
+  'app.routes.ts': `import { Routes } from '@angular/router';
+import { RecipeListComponent } from './recipe-list/recipe-list.component';
+import { FavoritesComponent } from './favorites/favorites.component';
+import { ShoppingListComponent } from './shopping-list/shopping-list.component';
+import { RecipeDetailComponent } from './recipe-detail/recipe-detail.component';
+
+export const appRoutes: Routes = [
+  { path: '', component: RecipeListComponent },
+  { path: 'recipe/:id', component: RecipeDetailComponent },
+  { path: 'favorites', component: FavoritesComponent },
+  { path: 'shopping', component: ShoppingListComponent },
+  { path: '**', redirectTo: '' },
+];
+`,
+
+  'models/recipe.model.ts': `export interface Recipe {
+  id: number;
+  title: string;
+  cuisine: string;
+  ingredients: string[];
+  instructions?: string | string[];
+  images: string[];
+}`,
+
+  'services/recipe.service.ts': `import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Recipe } from '../models/recipe.model';
+import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
+
+@Injectable({ providedIn: 'root' })
+export class RecipeService {
+  private readonly API = 'https://dummyjson.com/recipes';
+  private readonly PLACEHOLDER = 'https://via.placeholder.com/400x250?text=No+Image';
+
+  constructor(private http: HttpClient) {}
+
+  fetchAll(limit = 100): Observable<Recipe[]> {
+    return this.http.get<any>(\`\${this.API}?limit=\${limit}\`).pipe(
+      map(res => (res?.recipes || []).map(r => ({
+        id: r.id,
+        title: r.title || r.name || 'No title',
+        cuisine: r.cuisine || 'Unknown',
+        ingredients: Array.isArray(r.ingredients)? r.ingredients : [String(r.ingredients||'')],
+        instructions: r.instructions || r.steps || '',
+        images: (r.images && r.images.length) ? r.images : [this.PLACEHOLDER]
+      })))
+    );
+  }
+
+  fetchById(id: number): Observable<Recipe> {
+    return this.http.get<any>(\`\${this.API}/\${id}\`).pipe(
+      map(r => ({
+        id: r.id,
+        title: r.title || r.name || 'No title',
+        cuisine: r.cuisine || 'Unknown',
+        ingredients: Array.isArray(r.ingredients)? r.ingredients : [String(r.ingredients||'')],
+        instructions: r.instructions || r.steps || '',
+        images: (r.images && r.images.length) ? r.images : [this.PLACEHOLDER]
+      }))
+    );
+  }
+}`,
+
+  'stores/recipe.store.ts': `import { Injectable } from '@angular/core';
+import { BehaviorSubject, combineLatest, map } from 'rxjs';
+import { Recipe } from '../models/recipe.model';
+import { RecipeService } from '../services/recipe.service';
+
+@Injectable({ providedIn: 'root' })
+export class RecipeStore {
+  recipesSubject = new BehaviorSubject<Recipe[]>([]);
+  recipes$ = this.recipesSubject.asObservable();
+
+  search$ = new BehaviorSubject<string>('');
+  ingredient$ = new BehaviorSubject<string>('');
+  cuisine$ = new BehaviorSubject<string>('');
+
+  favoritesSubject = new BehaviorSubject<number[]>([]);
+  favorites$ = this.favoritesSubject.asObservable();
+
+  filtered$ = combineLatest([
+    this.recipes$,
+    this.search$,
+    this.ingredient$,
+    this.cuisine$
+  ]).pipe(map(([recipes,s,i,c])=>{
+    s = (s||'').toLowerCase();
+    i = (i||'').toLowerCase();
+    c = (c||'').toLowerCase();
+    return recipes.filter(r=>{
+      const title = (r.title||'').toLowerCase();
+      const matchesSearch = s? title.includes(s) : true;
+      const matchesIng = i? (r.ingredients||[]).some(x=>x.toLowerCase().includes(i)) : true;
+      const matchesCuisine = c? (r.cuisine||'').toLowerCase().includes(c) : true;
+      return matchesSearch && matchesIng && matchesCuisine;
+    });
+  }));
+
+  constructor(private api:RecipeService){
+    this.api.fetchAll().subscribe(list=>this.recipesSubject.next(list));
+    const fav = localStorage.getItem('favorites');
+    if(fav) this.favoritesSubject.next(JSON.parse(fav));
+    this.favorites$.subscribe(arr=>localStorage.setItem('favorites', JSON.stringify(arr||[])));
+  }
+
+  setSearch(v:string){ this.search$.next(v); }
+  setIngredient(v:string){ this.ingredient$.next(v); }
+  setCuisine(v:string){ this.cuisine$.next(v); }
+  toggleFavorite(id:number){
+    const arr = [...new Set(this.favoritesSubject.getValue())];
+    const idx = arr.indexOf(id);
+    if(idx===-1) arr.push(id); else arr.splice(idx,1);
+    this.favoritesSubject.next(arr);
+  }
+  getRecipe(id:number){ return this.recipesSubject.getValue().find(r=>r.id===id); }
+  generateShoppingList(ids?:number[]){ 
+    const all = this.recipesSubject.getValue();
+    const sel = ids?.length? ids : this.favoritesSubject.getValue();
+    const set = new Set<string>();
+    all.forEach(r=>{ if(sel.includes(r.id)) r.ingredients.forEach(x=>set.add(x)) });
+    return Array.from(set);
+  }
+}`,
+
+  // Components
+  'recipe-list/recipe-list.component.ts': `import { Component } from '@angular/core';
+import { RecipeStore } from '../stores/recipe.store';
+import { Observable } from 'rxjs';
+import { Recipe } from '../models/recipe.model';
+
+@Component({
+  selector: 'app-recipe-list',
+  standalone: true,
+  template: \`
+  <div class="mb-3">
+    <input class="form-control mb-2" placeholder="Search name..." (input)="store.setSearch($any($event.target).value)" />
+    <input class="form-control mb-2" placeholder="Ingredient..." (input)="store.setIngredient($any($event.target).value)" />
+    <input class="form-control mb-2" placeholder="Cuisine..." (input)="store.setCuisine($any($event.target).value)" />
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-4" *ngFor="let r of filtered$ | async">
+      <div class="recipe-card">
+        <img [src]="r.images[0]" (error)="r.images[0]='https://via.placeholder.com/400x250?text=No+Image'" />
+        <h5>{{ r.title }}</h5>
+        <p><small>{{ r.cuisine }}</small></p>
+        <button class="btn btn-sm btn-outline-primary" (click)="store.toggleFavorite(r.id)">
+          {{ (favorites$ | async)?.includes(r.id) ? 'Remove from Favorites' : 'Add to Favorites' }}
+        </button>
+      </div>
+    </div>
+  </div>
+  \`,
+})
+export class RecipeListComponent {
+  filtered$: Observable<Recipe[]>;
+  favorites$: Observable<number[]>;
+  constructor(public store: RecipeStore){
+    this.filtered$ = this.store.filtered$;
+    this.favorites$ = this.store.favorites$;
+  }
+}`,
+
+  'favorites/favorites.component.ts': `import { Component } from '@angular/core';
+import { RecipeStore } from '../stores/recipe.store';
+import { Observable } from 'rxjs';
+import { Recipe } from '../models/recipe.model';
+
+@Component({
+  selector: 'app-favorites',
+  standalone: true,
+  template: \`
+  <h4>Favorites</h4>
+  <div class="row g-3">
+    <div class="col-md-4" *ngFor="let r of favoriteRecipes$ | async">
+      <div class="recipe-card">
+        <img [src]="r.images[0]" />
+        <h5>{{ r.title }}</h5>
+        <p><small>{{ r.cuisine }}</small></p>
+        <button class="btn btn-sm btn-outline-danger" (click)="store.toggleFavorite(r.id)">Remove</button>
+      </div>
+    </div>
+  </div>
+  \`,
+})
+export class FavoritesComponent {
+  favoriteRecipes$: Observable<Recipe[]>;
+  constructor(public store: RecipeStore){
+    this.favoriteRecipes$ = this.store.favorites$.pipe(map(ids=>this.store.recipesSubject.getValue().filter(r=>ids.includes(r.id))));
+  }
+}`,
+
+  'shopping-list/shopping-list.component.ts': `import { Component } from '@angular/core';
+import { RecipeStore } from '../stores/recipe.store';
+
+@Component({
+  selector: 'app-shopping-list',
+  standalone: true,
+  template: \`
+    <h4>Shopping List</h4>
+    <ul>
+      <li *ngFor="let item of shoppingList">{{item}}</li>
+    </ul>
+    <button class="btn btn-sm btn-secondary" (click)="clear()">Clear List</button>
+  \`,
+})
+export class ShoppingListComponent {
+  shoppingList: string[] = [];
+  constructor(public store: RecipeStore){
+    this.shoppingList = store.generateShoppingList();
+  }
+  clear(){ this.shoppingList = []; }
+}`,
+
+  'recipe-detail/recipe-detail.component.ts': `import { Component, OnInit } from '@angular/core';
+import { RecipeStore } from '../stores/recipe.store';
+import { ActivatedRoute } from '@angular/router';
+import { Recipe } from '../models/recipe.model';
+
+@Component({
+  selector: 'app-recipe-detail',
+  standalone: true,
+  template: \`
+    <div *ngIf="recipe">
+      <h3>{{recipe.title}}</h3>
+      <img [src]="recipe.images[0]" style="width:100%; max-height:300px; object-fit:cover;" />
+      <p><strong>Cuisine:</strong> {{recipe.cuisine}}</p>
+      <p><strong>Ingredients:</strong></p>
+      <ul><li *ngFor="let i of recipe.ingredients">{{i}}</li></ul>
+      <p><strong>Instructions:</strong></p>
+      <p>{{recipe.instructions}}</p>
+    </div>
+  \`,
+})
+export class RecipeDetailComponent implements OnInit {
+  recipe?: Recipe;
+  constructor(private store: RecipeStore, private route: ActivatedRoute){}
+  ngOnInit(){
+    const id = Number(this.route.snapshot.paramMap.get('id'));
+    this.recipe = this.store.getRecipe(id);
+  }
+}`,
+
+  'dark-mode-toggle/dark-mode-toggle.component.ts': `import { Component } from '@angular/core';
+
+@Component({
+  selector: 'dark-mode-toggle',
+  standalone: true,
+  template: \`
+    <button class="btn btn-sm btn-outline-dark" (click)="toggle()">Toggle Dark Mode</button>
+  \`,
+})
+export class DarkModeToggleComponent {
+  toggle(){ document.body.classList.toggle('dark'); }
+}`,
+};
+
+for (const [filePath, content] of Object.entries(files)) {
+  const fullPath = path.join(SRC, filePath);
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, content, 'utf8');
+}
+
+console.log('✅ Full src/app folder created with all components, services, models, and store.');
